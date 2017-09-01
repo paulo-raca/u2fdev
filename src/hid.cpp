@@ -3,7 +3,26 @@
 #include <stdio.h>
 #include <string.h>
 
+#ifdef U2FHID_LOG
 #define LOG(fmt, ...) fprintf(stderr, "u2f-hid: " fmt "\n", ##__VA_ARGS__)
+static void dump(const char* name, const void* buffer, int length) {
+	fprintf(stderr, "u2f-hid: %s: {", name);
+	for (int i=0; i<length; i++) {
+		if (i % 16 == 0) {
+			fprintf(stderr, "\n    ");
+		} else {
+			fprintf(stderr, " ");
+		}
+
+		fprintf(stderr, "%02x", ((uint8_t*)buffer)[i]);
+	}
+	fprintf(stderr, "\n}\n");
+}
+#else
+#define LOG(fmt, ...)
+static inline void dump(const char* name, const void* buffer, int length) {}
+#endif
+
 
 #define min(a,b) (a<b?a:b)
 #define max(a,b) (a>b?a:b)
@@ -64,22 +83,6 @@ void u2f::HidLock::lock(uint32_t channel, uint8_t seconds) {
 }
 bool u2f::HidLock::isLocked(uint32_t channel) {
 	return (channel != this->channel) && (now() < lockedUntil);
-}
-
-
-
-static void dump(const char* name, const void* buffer, int length) {
-	fprintf(stderr, "u2f-hid: %s: {", name);
-	for (int i=0; i<length; i++) {
-		if (i % 16 == 0) {
-			fprintf(stderr, "\n    ");
-		} else {
-			fprintf(stderr, " ");
-		}
-
-		fprintf(stderr, "%02x", ((uint8_t*)buffer)[i]);
-	}
-	fprintf(stderr, "\n}\n");
 }
 
 static const uint8_t descriptor[] = {
