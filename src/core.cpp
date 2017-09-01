@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <inttypes.h>
+#include <stdarg.h>
 
 #define LOG(fmt, ...) fprintf(stderr, "u2f-core: " fmt "\n", ##__VA_ARGS__)
 
@@ -18,6 +19,9 @@
 #define INS_AUTHENTICATE              0x02
 #define INS_VERSION                   0x03
 
+#define AUTH_CHECK_ONLY               0x07
+#define AUTH_ENFORCE_USER_SIGN        0x03
+#define AUTH_DONT_ENFORCE_USER_SIGN   0x08
 
 struct uECC_SHA256 {
 	uECC_HashContext uECC;
@@ -48,6 +52,66 @@ struct uECC_SHA256 {
 };
 
 
+
+static void sha256(uint8_t* hash, ...) {
+	va_list ap;
+	va_start(ap, hash);
+
+	SHA256_CTX hashContext;
+	sha256_init(&hashContext);
+
+	while (true) {
+		uint8_t* buffer = va_arg(ap, uint8_t*);
+		if (buffer == nullptr) break;
+		int bufferSize = va_arg(ap, int);
+		sha256_update(&hashContext, buffer, bufferSize);
+	}
+
+	sha256_final(&hashContext, hash);
+}
+
+
+
+static void sign(const uint8_t* privateKey, const uint8_t* message, uint32_t messageSize, uint8_t* signature, uint8_t &signatureSize) {
+	uECC_SHA256 eccHash;
+	uint8_t rawSignature[64]; //Maybe use signature and perform DER bullshit in-place?
+
+	uECC_sign_deterministic(
+		privateKey,
+		message,
+		messageSize,
+		&eccHash.uECC,
+		rawSignature,
+		uECC_secp256r1());
+
+	//Wraps the key in a fucking DER container
+	signature[signatureSize++] = 0x30; //A header byte indicating a compound structure.
+	signature[signatureSize++] = 0; // Will fill later
+
+
+	signature[signatureSize++] = 0x02; //Integer number
+	if (rawSignature[0] & 0x80) {
+		signature[signatureSize++] = 0x21;
+		signature[signatureSize++] = 0x00;
+	} else {
+		signature[signatureSize++] = 0x20;
+	}
+	memcpy(&signature[signatureSize], &rawSignature[0], 32);
+	signatureSize += 32;
+
+
+	signature[signatureSize++] = 0x02; //Integer number
+	if (rawSignature[32] & 0x80) {
+		signature[signatureSize++] = 0x21;
+		signature[signatureSize++] = 0x00;
+	} else {
+		signature[signatureSize++] = 0x20;
+	}
+	memcpy(&signature[signatureSize], &rawSignature[32], 32);
+	signatureSize += 32;
+
+	signature[1] = signatureSize - 2; //Fill Signature size
+}
 
 
 
@@ -132,9 +196,8 @@ uint16_t u2f::Core::processRequest(uint8_t cla, uint8_t ins, uint8_t p1, uint8_t
 		}
 
 		case INS_AUTHENTICATE: {
-			LOG("INS_AUTHENTICATE -- Not supported yet");
-			responseSize = 0;
-			return SW_INS_NOT_SUPPORTED;
+			LOG("INS_AUTHENTICATE - %d", p1);
+			return processAuthenticationRequest(p1, request, requestSize, response, responseSize);
 		}
 
 		case INS_VERSION: {
@@ -216,60 +279,87 @@ uint16_t u2f::Core::processRegisterRequest(const uint8_t *request, uint32_t requ
 	//Signature
 	uint8_t *responseSignature = &response[responseSize];
 	uint8_t responseSignatureSize = 0;
-	uint8_t hash[32];
-	uint8_t signature[64];
 	{
-		SHA256_CTX hashContext;
-		sha256_init(&hashContext);
+		uint8_t hash[32];
 		uint8_t hash_reserved = 0;
-		sha256_update(&hashContext, &hash_reserved, 1);
-		sha256_update(&hashContext, applicationHash, 32);
-		sha256_update(&hashContext, challengeHash, 32);
-		sha256_update(&hashContext, responseKeyHandle, responseKeyHandleSize);
-		sha256_update(&hashContext, &responsePublicKeyType, 1);
-		sha256_update(&hashContext, responsePublicKey, 64);
-		sha256_final(&hashContext, hash);
-
-		uECC_SHA256 eccHash;
-
-		uECC_sign_deterministic(
-			attestationPrivateKey,
+		sha256(
 			hash,
-			sizeof(hash),
-			&eccHash.uECC,
-			signature,
-			uECC_secp256r1());
+			&hash_reserved, 1,
+			applicationHash, 32,
+			challengeHash, 32,
+			responseKeyHandle, responseKeyHandleSize,
+			&responsePublicKeyType, 1,
+			responsePublicKey, 64,
+			nullptr);
 
-		//Build a fucking DER wrapper
-		responseSignature[responseSignatureSize++] = 0x30; //A header byte indicating a compound structure.
-		responseSignature[responseSignatureSize++] = 0; // Will fill later
-
-
-		responseSignature[responseSignatureSize++] = 0x02; //Integer number
-		if (signature[0] & 0x80) {
-			responseSignature[responseSignatureSize++] = 0x21;
-			responseSignature[responseSignatureSize++] = 0x00;
-		} else {
-			responseSignature[responseSignatureSize++] = 0x20;
-		}
-		memcpy(&responseSignature[responseSignatureSize], &signature[0], 32);
-		responseSignatureSize += 32;
-
-
-		responseSignature[responseSignatureSize++] = 0x02; //Integer number
-		if (signature[32] & 0x80) {
-			responseSignature[responseSignatureSize++] = 0x21;
-			responseSignature[responseSignatureSize++] = 0x00;
-		} else {
-			responseSignature[responseSignatureSize++] = 0x20;
-		}
-		memcpy(&responseSignature[responseSignatureSize], &signature[32], 32);
-		responseSignatureSize += 32;
-
-		responseSignature[1] = responseSignatureSize - 2; //Fill Signature size
-
+		sign(attestationPrivateKey, hash, sizeof(hash), responseSignature, responseSignatureSize);
 		responseSize += responseSignatureSize;
 	}
+	return SW_NO_ERROR;
+}
+
+uint16_t u2f::Core::processAuthenticationRequest(uint8_t control, const uint8_t *request, uint32_t requestSize, uint8_t *response, uint32_t &responseSize) {
+	if (control != AUTH_CHECK_ONLY && control != AUTH_ENFORCE_USER_SIGN && control != AUTH_DONT_ENFORCE_USER_SIGN) {
+		LOG("Authenticate - Invalid control byte %d", control);
+		responseSize = 0;
+		return SW_WRONG_DATA;
+	}
+
+	if (requestSize < 65) {
+		LOG("Authenticate - RequestSize is too small: %d", requestSize);
+		responseSize = 0;
+		return SW_WRONG_LENGTH;
+	}
+
+	const uint8_t *challengeHash = request;
+	const uint8_t *applicationHash = request+32;
+	uint8_t handleSize = request[64];
+	const uint8_t *handle = request+65;
+	bool userPresent = isUserPresent();
+
+	if (requestSize != handleSize + 65) {
+		LOG("Authenticate - RequestSize should be %d, was %d", handleSize + 65, requestSize);
+		responseSize = 0;
+		return SW_WRONG_LENGTH;
+	}
+
+	uint8_t privateKey[32];
+	if (!fetchHandle(applicationHash, handle, handleSize, privateKey)) {
+		LOG("Authenticate - Invalid handle");
+		responseSize = 0;
+		return SW_WRONG_DATA;
+	}
+
+	//
+	if ((control == AUTH_CHECK_ONLY) || (control == AUTH_ENFORCE_USER_SIGN && !userPresent)) {
+		LOG("Authenticate - User not present");
+		responseSize = 0;
+		return SW_CONDITIONS_NOT_SATISFIED;
+	}
+
+
+	responseSize = 0;
+	response[responseSize++] = 56;
+	static uint32_t counter = 0; //FIXME
+	counter++;
+	response[responseSize++] = counter >> 24;
+	response[responseSize++] = counter >> 16;
+	response[responseSize++] = counter >>  8;
+	response[responseSize++] = counter >>  0;
+
+	uint8_t hash[32];
+	sha256(
+		hash,
+		applicationHash, 32,
+		response, 5,
+		challengeHash, 32,
+		nullptr);
+
+	uint8_t signatureSize;
+	sign(privateKey, hash, sizeof(hash), &response[responseSize], signatureSize);
+	responseSize += signatureSize;
+
+	LOG("Authenticate - Success");
 	return SW_NO_ERROR;
 }
 
@@ -282,7 +372,7 @@ void u2f::Core::createHandle(const uint8_t *applicationHash, const uint8_t *priv
 	handleSize = 64;
 }
 
-bool u2f::Core::fetchHandle(const uint8_t *applicationHash, uint8_t *handle, uint8_t handleSize, uint8_t *privateKey) {
+bool u2f::Core::fetchHandle(const uint8_t *applicationHash, const uint8_t *handle, uint8_t handleSize, uint8_t *privateKey) {
 	if (handleSize != 64)
 		return false; // Wrong size
 	if (memcmp(applicationHash, handle, 32))
