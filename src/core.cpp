@@ -132,160 +132,189 @@ uint16_t u2f::Core::processRegisterRequest(const uint8_t *request, uint32_t requ
 		responseSize = 0;
 		return SW_WRONG_LENGTH;
 	}
-	if (!isUserPresent()) {
-		responseSize = 0;
-		return SW_CONDITIONS_NOT_SATISFIED;
-	}
 
-	const uint8_t *challengeHash = request;
-	const uint8_t *applicationHash = request+32;
+	Hash &challengeHash = *(Hash*)&request[0];
+	Hash &applicationHash = *(Hash*)&request[32];
 
 	responseSize = 0;
 
 	//Reserved byte
-	uint8_t &responseReserved = response[responseSize];
+	uint8_t &responseReserved = response[responseSize++];
 	responseReserved = 0x05;
-	responseSize++;
 
-	//Public key
+	// Public key
 	PublicKey &responsePublicKey = *(PublicKey*)&response[responseSize];
 	responseSize += sizeof(PublicKey);
 
-	PrivateKey privateKey;
+	// Handle
+	uint8_t &responseKeyHandleSize = response[responseSize++];
+	Handle &responseKeyHandle = *(Handle*)&response[responseSize];
 
-	if (!Crypto::makeKeyPair(responsePublicKey, privateKey)) {
-		//Failed to create a key.
-		//I guess this shoudn't happen?
+	if (!enroll(applicationHash, responseKeyHandle, responseKeyHandleSize, responsePublicKey)) {
+		//Failed to create a key, probably because the user isn't present
 		responseSize = 0;
 		return SW_CONDITIONS_NOT_SATISFIED;
 	}
 
-	//Key Handle
-	uint8_t &responseKeyHandleSize = response[responseSize];
-	responseSize++;
-
-	uint8_t *responseKeyHandle = &response[responseSize];
-	createHandle(applicationHash, privateKey, responseKeyHandle, responseKeyHandleSize);
 	responseSize += responseKeyHandleSize;
 
-	//Certificate
+	// Attestation
+	Crypto::Signer *attestationSigner = getAttestationSigner();
+
+	// Copy the attestation Certificate to the response
+	const uint8_t *attestationCertificate = nullptr;
+	uint16_t attestationCertificateSize = 0;
+	attestationSigner->getCertificate(attestationCertificate, attestationCertificateSize);
+
 	uint8_t *responseAttestationCertificate = &response[responseSize];
+	memcpy(responseAttestationCertificate, attestationCertificate, attestationCertificateSize);
+	responseSize += attestationCertificateSize;
 
-	const uint8_t *attestationPrivateKey = nullptr;
-	const uint8_t *attestationCertificateDer = nullptr;
-	uint16_t attestationCertificateDerSize = 0;
-	getAttestationCertificate(attestationCertificateDer, attestationCertificateDerSize);
+	// Calculates the challenge hash
+	Hash hash;
+	uint8_t hash_reserved = 0;
+	Crypto::sha256(
+		hash,
+		&hash_reserved, 1,
+		applicationHash, sizeof(Hash),
+		challengeHash, sizeof(Hash),
+		responseKeyHandle, responseKeyHandleSize,
+		&responsePublicKey, sizeof(PublicKey),
+		nullptr);
 
-	memcpy(responseAttestationCertificate, attestationCertificateDer, attestationCertificateDerSize);
-	responseSize += attestationCertificateDerSize;
-
-	//Signature
+	//Sign the challenge
 	Signature &responseSignature = *(Signature*)&response[responseSize];
-	{
-		Hash hash;
-		uint8_t hash_reserved = 0;
-		Crypto::sha256(
-			hash,
-			&hash_reserved, 1,
-			applicationHash, sizeof(Hash),
-			challengeHash, sizeof(Hash),
-			responseKeyHandle, responseKeyHandleSize,
-			&responsePublicKey, sizeof(PublicKey),
-			nullptr);
+	attestationSigner->sign(hash, responseSignature);
+	responseSize += Crypto::signatureSize(responseSignature);
 
-		attestationSign(hash, responseSignature);
-		responseSize += Crypto::signatureSize(responseSignature);;
-	}
+	delete attestationSigner;
 	return SW_NO_ERROR;
 }
 
 uint16_t u2f::Core::processAuthenticationRequest(uint8_t control, const uint8_t *request, uint32_t requestSize, uint8_t *response, uint32_t &responseSize) {
-	if (control != AUTH_CHECK_ONLY && control != AUTH_ENFORCE_USER_SIGN && control != AUTH_DONT_ENFORCE_USER_SIGN) {
-		LOG("Authenticate - Invalid control byte %d", control);
+	SignCondition signCondition = (SignCondition)control;
+	if (signCondition != SignCondition::Always && signCondition != SignCondition::Never && signCondition != SignCondition::RequiresUserPresence) {
+		LOG("Authenticate - Invalid sign condition %d", (uint8_t)signCondition);
 		responseSize = 0;
 		return SW_WRONG_DATA;
 	}
 
 	if (requestSize < 65) {
-		LOG("Authenticate - RequestSize is too small: %d", requestSize);
+		LOG("Authenticate - Request size is too small: %d", requestSize);
 		responseSize = 0;
 		return SW_WRONG_LENGTH;
 	}
 
-	const uint8_t *challengeHash = request;
-	const uint8_t *applicationHash = request+32;
+	Hash &challengeHash = *(Hash*)&request[0];
+	Hash &applicationHash = *(Hash*)&request[32];
 	uint8_t handleSize = request[64];
-	const uint8_t *handle = request+65;
-	bool userPresent = isUserPresent();
+	Handle &handle = *(Handle*)&request[65];
+	bool userPresent = false;
+	uint32_t authCounter = 0;
 
 	if (requestSize != handleSize + 65) {
-		LOG("Authenticate - RequestSize should be %d, was %d", handleSize + 65, requestSize);
+		LOG("Authenticate - Request size should be %d, was %d", handleSize + 65, requestSize);
 		responseSize = 0;
 		return SW_WRONG_LENGTH;
 	}
 
-	uint8_t privateKey[32];
-	if (!fetchHandle(applicationHash, handle, handleSize, privateKey)) {
+	Crypto::Signer *signer = authenticate(applicationHash, handle, handleSize, signCondition != SignCondition::Never, userPresent, authCounter);
+
+	// Check for invalid Handle
+	if (signer == nullptr) {
 		LOG("Authenticate - Invalid handle");
 		responseSize = 0;
 		return SW_WRONG_DATA;
 	}
 
-	//
-	if ((control == AUTH_CHECK_ONLY) || (control == AUTH_ENFORCE_USER_SIGN && !userPresent)) {
+	// Check for user not present
+	if ((signCondition == SignCondition::Never) || ((signCondition == SignCondition::RequiresUserPresence) && !userPresent)) {
 		LOG("Authenticate - User not present");
 		responseSize = 0;
+		delete signer;
 		return SW_CONDITIONS_NOT_SATISFIED;
 	}
 
-
 	responseSize = 0;
-	response[responseSize++] = 56;
-	static uint32_t counter = 0; //FIXME
-	counter++;
-	response[responseSize++] = counter >> 24;
-	response[responseSize++] = counter >> 16;
-	response[responseSize++] = counter >>  8;
-	response[responseSize++] = counter >>  0;
+	response[responseSize++] = userPresent ? 1 : 0;
+	response[responseSize++] = authCounter >> 24;
+	response[responseSize++] = authCounter >> 16;
+	response[responseSize++] = authCounter >>  8;
+	response[responseSize++] = authCounter >>  0;
 
-	Signature &signature = *(Signature*)&response[responseSize];
-
+	// Perform signature
 	Hash hash;
 	Crypto::sha256(
 		hash,
-		applicationHash, 32,
-		response, 5,
-		challengeHash, 32,
+		applicationHash, sizeof(Hash),
+		response, responseSize,
+		challengeHash, sizeof(Hash),
 		nullptr);
 
-	Crypto::sign(privateKey, hash, signature);
+	Signature &signature = *(Signature*)&response[responseSize];
+	signer->sign(hash, signature);
+	delete signer;
 	responseSize += Crypto::signatureSize(signature);
 
 	LOG("Authenticate - Success");
 	return SW_NO_ERROR;
 }
 
+bool u2f::Core::enroll(const Hash &applicationHash, Handle &handle, uint8_t &handleSize, PublicKey &publicKey) {
+	// A user is required
+	if (!isUserPresent()) {
+		return false;
+	}
 
+	// Create the handle
+	handleSize = sizeof(Hash) + sizeof(PrivateKey);
+	Hash &handleApplicationHash = *(Hash*)&handle[0];
+	PrivateKey& handlePrivateKey = *(PrivateKey*)&handle[sizeof(Hash)];
 
-// Not exactly secure, but it is only a test implementation.
-void u2f::Core::createHandle(const uint8_t *applicationHash, const uint8_t *privateKey, uint8_t *handle, uint8_t &handleSize) {
-	memcpy(handle   , applicationHash, 32);
-	memcpy(handle+32, privateKey, 32);
-	handleSize = 64;
+	//1st part of the handle is applicationHash
+	memcpy(handleApplicationHash, applicationHash, sizeof(Hash));
+
+	//Create the keypair
+	if (!Crypto::makeKeyPair(publicKey, handlePrivateKey)) {
+		//Failed to create a key.
+		//I guess this shoudn't happen?
+		return false;
+	}
+
+	return true; // Enrolled!
 }
 
-bool u2f::Core::fetchHandle(const uint8_t *applicationHash, const uint8_t *handle, uint8_t handleSize, uint8_t *privateKey) {
-	if (handleSize != 64)
-		return false; // Wrong size
-	if (memcmp(applicationHash, handle, 32))
-		return false; // Wrong applications
+u2f::Crypto::Signer* u2f::Core::authenticate(const Hash &applicationHash, const Handle &handle, uint8_t handleSize, bool checkUserPresence, bool &userPresent, uint32_t &authCounter) {
+	static uint32_t _authcounter = 0; // This sucks, the counter should not be reset at every launch
 
-	memcpy(privateKey, handle+32, 32);
-	return true;
+	// Check for a valid handle
+	if (handleSize != sizeof(Hash) + sizeof(PrivateKey))
+		return nullptr;
+	const Hash& handleApplicationHash = *(Hash*)&handle[0];
+	const PrivateKey& handlePrivateKey = *(PrivateKey*)&handle[32];
+
+	// Ensure the applicationHash matches
+	if (memcmp(applicationHash, handleApplicationHash, sizeof(Hash)))
+		return nullptr;
+
+	// Check for user presence
+	if (checkUserPresence) {
+		userPresent = isUserPresent();
+	}
+
+	// Get the authentication counter
+	authCounter = _authcounter++;
+
+	// Return the Signer
+	return new Crypto::SimpleSigner(handlePrivateKey);
 }
 
-void u2f::Core::getAttestationCertificate(const uint8_t *&certificate, uint16_t &certificateSize) {
-	static const uint8_t savedCertificate[] = {
+u2f::Crypto::Signer* u2f::Core::getAttestationSigner() {
+	static const PrivateKey privateKey = {
+		0xf3, 0xfc, 0xcc, 0x0d, 0x00, 0xd8, 0x03, 0x19, 0x54, 0xf9, 0x08, 0x64, 0xd4, 0x3c, 0x24, 0x7f,
+		0x4b, 0xf5, 0xf0, 0x66, 0x5c, 0x6b, 0x50, 0xcc, 0x17, 0x74, 0x9a, 0x27, 0xd1, 0xcf, 0x76, 0x64
+	};
+	static const uint8_t certificate[] = {
 		0x30, 0x82, 0x01, 0x3c, 0x30, 0x81, 0xe4, 0xa0, 0x03, 0x02, 0x01, 0x02, 0x02, 0x0a, 0x47, 0x90,
 		0x12, 0x80, 0x00, 0x11, 0x55, 0x95, 0x73, 0x52, 0x30, 0x0a, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce,
 		0x3d, 0x04, 0x03, 0x02, 0x30, 0x17, 0x31, 0x15, 0x30, 0x13, 0x06, 0x03, 0x55, 0x04, 0x03, 0x13,
@@ -307,19 +336,8 @@ void u2f::Core::getAttestationCertificate(const uint8_t *&certificate, uint16_t 
 		0x63, 0x1b, 0x14, 0x59, 0xf0, 0x9e, 0x63, 0x30, 0x05, 0x57, 0x22, 0xc8, 0xd8, 0x9b, 0x7f, 0x48,
 		0x88, 0x3b, 0x90, 0x89, 0xb8, 0x8d, 0x60, 0xd1, 0xd9, 0x79, 0x59, 0x02, 0xb3, 0x04, 0x10, 0xdf
 	};
-
-	certificate = savedCertificate;
-	certificateSize = sizeof(savedCertificate);
+	return new Crypto::SimpleSigner(privateKey, certificate, sizeof(certificate));
 }
-
-bool u2f::Core::attestationSign(const Hash &messageHash, Signature &signature) {
-	PrivateKey privateKey = {
-		0xf3, 0xfc, 0xcc, 0x0d, 0x00, 0xd8, 0x03, 0x19, 0x54, 0xf9, 0x08, 0x64, 0xd4, 0x3c, 0x24, 0x7f,
-		0x4b, 0xf5, 0xf0, 0x66, 0x5c, 0x6b, 0x50, 0xcc, 0x17, 0x74, 0x9a, 0x27, 0xd1, 0xcf, 0x76, 0x64
-	};
-	return Crypto::sign(privateKey, messageHash, signature);
-}
-
 
 bool u2f::Core::isUserPresent() {
 	return true;

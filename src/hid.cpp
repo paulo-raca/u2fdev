@@ -1,10 +1,13 @@
 #include <u2f/hid.h>
 
-#include <stdio.h>
 #include <string.h>
 
 #ifdef U2FHID_LOG
+
+#include <stdio.h>
+
 #define LOG(fmt, ...) fprintf(stderr, "u2f-hid: " fmt "\n", ##__VA_ARGS__)
+
 static void dump(const char* name, const void* buffer, int length) {
 	fprintf(stderr, "u2f-hid: %s: {", name);
 	for (int i=0; i<length; i++) {
@@ -18,9 +21,12 @@ static void dump(const char* name, const void* buffer, int length) {
 	}
 	fprintf(stderr, "\n}\n");
 }
+
 #else
+
 #define LOG(fmt, ...)
 static inline void dump(const char* name, const void* buffer, int length) {}
+
 #endif
 
 

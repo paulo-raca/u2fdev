@@ -9,12 +9,75 @@ namespace u2f {
 	typedef uint8_t Signature[73];
 	typedef uint8_t Handle[255];
 
-	class Crypto {
-	public:
-		static void sha256(u2f::Hash &hash, ...);
-		static bool makeKeyPair(PublicKey &publicKey, PrivateKey &privateKey);
-		static bool sign(const PrivateKey &privateKey, const Hash &messageHash, u2f::Signature &signature);
-		static uint8_t signatureSize(const Signature &signature);
+	enum class SignCondition {
+		Never = 0x07,
+		Always = 0x08,
+		RequiresUserPresence = 0x03
+	};
+
+	namespace Crypto {
+		void sha256(u2f::Hash &hash, ...);
+		bool makeKeyPair(PublicKey &publicKey, PrivateKey &privateKey);
+		bool sign(const PrivateKey &privateKey, const Hash &messageHash, u2f::Signature &signature);
+		uint8_t signatureSize(const Signature &signature);
+
+		/**
+		 * Performs signatures of pre-hashed buffers.
+		 *
+		 * This extra indirection layer allows you to be extra-paranoid with your private keys -- Use a crypto-chip and whatnot.
+		 *
+		 * Optionally, you can also retrieve a PEM certificate with the public key.
+		 */
+		class Signer {
+		public:
+			/**
+			* Signs the messageHash with the private key.
+			*
+			* @param[in] messageHash SHA256 of the message being signed
+			* @param[out] signature Buffer where the signature will be stored
+			*
+			* @return true if the signature was successfully created.
+			*/
+			virtual bool sign(const Hash &messageHash, u2f::Signature &signature) = 0;
+
+			/**
+			* Returns the attestation certificate as a PEM buffer.
+			*
+			* The buffer is valid until the Signer object is destructed and should not be freed by the caller.
+			*
+			* @param[out] certificate Will point to a buffer with the PEM certificate
+			* @param[out] certificateSize Will be set with the size of #certificate
+			*/
+			virtual bool getCertificate(const uint8_t *&certificate, uint16_t &certificateSize) = 0;
+		};
+
+		/**
+		 * Simplest implementation of a Signer, just wraps static buffers with the private key and certificate.
+		 *
+		 * It doesn't do any memory management -- The buffers aren't copied or freed anywhere.
+		 */
+		class SimpleSigner : public Signer {
+			const PrivateKey &privateKey;
+			const uint8_t *certificate;
+			const uint16_t certificateSize;
+		public:
+			SimpleSigner(const PrivateKey &privateKey)
+			: privateKey(privateKey), certificate(nullptr), certificateSize(0)
+			{}
+
+			SimpleSigner(const PrivateKey &privateKey, const uint8_t *certificate, uint16_t certificateSize)
+			: privateKey(privateKey), certificate(certificate), certificateSize(certificateSize)
+			{}
+
+			virtual bool sign(const Hash &messageHash, u2f::Signature &signature) {
+				return Crypto::sign(privateKey, messageHash, signature);
+			}
+			virtual bool getCertificate(const uint8_t *&certificate, uint16_t &certificateSize) {
+				certificate = this->certificate;
+				certificateSize = this->certificateSize;
+				return certificate != nullptr;
+			}
+		};
 	};
 
 
@@ -28,27 +91,42 @@ namespace u2f {
 		virtual bool supportsWink();
 		virtual bool isUserPresent();
 
-		//For a given applicationHash, register a privateKey and returns a handle
-		virtual void createHandle(const uint8_t *applicationHash, const uint8_t *privateKey, uint8_t *handle, uint8_t &handleSize);
-		//For a given applicationHash and handle, fetch the privateKey. Returns false if the handle is invalid
-		virtual bool fetchHandle(const uint8_t *applicationHash, const uint8_t *handle, uint8_t handleSize, uint8_t *privateKey);
+		/**
+		 * Creates a new handle.
+		 *
+		 * @param[in]  applicationHash Identifies the application bound to this handle.
+		 * @param[out] handle This buffer will be filled with the new handle.
+		 * @param[out] handleSize Size of #handle.
+		 * @param[out] publicKey The public key associated with the new #handle.
+		 *
+		 * @return true if a new handle was enrolled, false if failed because the user isn't present.
+		 */
+		virtual bool enroll(
+				const Hash &applicationHash,
+				Handle &handle,
+				uint8_t &handleSize,
+				PublicKey &publicKey);
 
 		/**
-		 * Returns the attestation certificate as a PEM buffer
+		 * Authenticates a handle.
 		 *
-		 * @param[out] certificate Will point to a buffer with the PEM certificate
-		 * @param[out] certificateSize Will be set with the size of #certificate
+		 * @param[in]  applicationHash Identifies the application.
+		 * @param[in]  handle Identifies the handle.
+		 * @param[in]  handleSize Size of #handle.
+		 * @param[in]  checkUserPresence If #userPresent should be populated.
+		 * @param[out] userPresent Indicates if the the user is present. (Only set if the handle is valid and #checkUserPresence is set)
+		 * @param[out] authCounter Monotonic counter of the number of times this handler (or this device) has been used. (Only set if the handle is valid)
+		 *
+		 * @return nullptr if the handle is invalid, or the the signer used to sign the authentication requests. It must be deleted by the caller.
 		 */
-		virtual void getAttestationCertificate(const uint8_t *&certificate, uint16_t &certificateSize);
+		virtual Crypto::Signer* authenticate(const Hash &applicationHash, const Handle &handle, uint8_t handleSize, bool checkUserPresence, bool &userPresent, uint32_t &authCounter);
 
 		/**
-		 * Signs the messageHash with the attestation private key
+		 * Returns the signer used for attestation of the registration.
 		 *
-		 * @param[in] messageHash SHA256 of the message being signed
-		 * @param[out] signature Buffer where the signature will be stored
+		 * @return The signer used to attestate the registration. It must be deleted by the caller.
 		 */
-		virtual bool attestationSign(const Hash &messageHash, Signature &signature);
-
+		virtual Crypto::Signer* getAttestationSigner();
 	};
 
 	class Protocol {
