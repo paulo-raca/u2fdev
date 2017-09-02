@@ -53,7 +53,7 @@ struct uECC_SHA256 {
 
 
 
-static void sha256(uint8_t* hash, ...) {
+static void sha256(u2f::Hash &hash, ...) {
 	va_list ap;
 	va_start(ap, hash);
 
@@ -72,18 +72,22 @@ static void sha256(uint8_t* hash, ...) {
 
 
 
-static void sign(const uint8_t* privateKey, const uint8_t* message, uint32_t messageSize, uint8_t* signature, uint8_t &signatureSize) {
+static bool sign(const u2f::PrivateKey &privateKey, const u2f::Hash &messageHash, u2f::Signature &signature) {
 	uECC_SHA256 eccHash;
 	uint8_t rawSignature[64]; //Maybe use signature and perform DER bullshit in-place?
 
-	uECC_sign_deterministic(
+	int sign_success = uECC_sign_deterministic(
 		privateKey,
-		message,
-		messageSize,
+		messageHash,
+		sizeof(u2f::Hash),
 		&eccHash.uECC,
 		rawSignature,
 		uECC_secp256r1());
 
+	if (!sign_success)
+		return false;
+
+	uint8_t signatureSize = 0;
 	//Wraps the key in a fucking DER container
 	signature[signatureSize++] = 0x30; //A header byte indicating a compound structure.
 	signature[signatureSize++] = 0; // Will fill later
@@ -111,8 +115,12 @@ static void sign(const uint8_t* privateKey, const uint8_t* message, uint32_t mes
 	signatureSize += 32;
 
 	signature[1] = signatureSize - 2; //Fill Signature size
+	return true;
 }
 
+static uint8_t signatureSize(const u2f::Signature &signature) {
+	return signature[1] + 2;
+}
 
 
 
@@ -192,16 +200,17 @@ uint16_t u2f::Core::processRequest(uint8_t cla, uint8_t ins, uint8_t p1, uint8_t
 
 	switch (ins) {
 		case INS_REGISTER: {
+			LOG("Register");
 			return processRegisterRequest(request, requestSize, response, responseSize);
 		}
 
 		case INS_AUTHENTICATE: {
-			LOG("INS_AUTHENTICATE - %d", p1);
+			LOG("Authenticate - %d", p1);
 			return processAuthenticationRequest(p1, request, requestSize, response, responseSize);
 		}
 
 		case INS_VERSION: {
-			LOG("INS_VERSION");
+			LOG("Version");
 			if (responseSize < 6) {
 				responseSize = 0;
 				return SW_WRONG_LENGTH;
@@ -271,16 +280,15 @@ uint16_t u2f::Core::processRegisterRequest(const uint8_t *request, uint32_t requ
 	const uint8_t *attestationPrivateKey = nullptr;
 	const uint8_t *attestationCertificateDer = nullptr;
 	uint16_t attestationCertificateDerSize = 0;
-	getAttestationCertificate(attestationPrivateKey, attestationCertificateDer, attestationCertificateDerSize);
+	getAttestationCertificate(attestationCertificateDer, attestationCertificateDerSize);
 
 	memcpy(responseAttestationCertificate, attestationCertificateDer, attestationCertificateDerSize);
 	responseSize += attestationCertificateDerSize;
 
 	//Signature
-	uint8_t *responseSignature = &response[responseSize];
-	uint8_t responseSignatureSize = 0;
+	Signature &responseSignature = *(Signature*)&response[responseSize];
 	{
-		uint8_t hash[32];
+		Hash hash;
 		uint8_t hash_reserved = 0;
 		sha256(
 			hash,
@@ -292,8 +300,8 @@ uint16_t u2f::Core::processRegisterRequest(const uint8_t *request, uint32_t requ
 			responsePublicKey, 64,
 			nullptr);
 
-		sign(attestationPrivateKey, hash, sizeof(hash), responseSignature, responseSignatureSize);
-		responseSize += responseSignatureSize;
+		attestationSign(hash, responseSignature);
+		responseSize += signatureSize(responseSignature);;
 	}
 	return SW_NO_ERROR;
 }
@@ -347,7 +355,9 @@ uint16_t u2f::Core::processAuthenticationRequest(uint8_t control, const uint8_t 
 	response[responseSize++] = counter >>  8;
 	response[responseSize++] = counter >>  0;
 
-	uint8_t hash[32];
+	Signature &signature = *(Signature*)&response[responseSize];
+
+	Hash hash;
 	sha256(
 		hash,
 		applicationHash, 32,
@@ -355,9 +365,8 @@ uint16_t u2f::Core::processAuthenticationRequest(uint8_t control, const uint8_t 
 		challengeHash, 32,
 		nullptr);
 
-	uint8_t signatureSize;
-	sign(privateKey, hash, sizeof(hash), &response[responseSize], signatureSize);
-	responseSize += signatureSize;
+	sign(privateKey, hash, signature);
+	responseSize += signatureSize(signature);
 
 	LOG("Authenticate - Success");
 	return SW_NO_ERROR;
@@ -381,41 +390,42 @@ bool u2f::Core::fetchHandle(const uint8_t *applicationHash, const uint8_t *handl
 	memcpy(privateKey, handle+32, 32);
 	return true;
 }
-void u2f::Core::getAttestationCertificate(const uint8_t *&privateKey, const uint8_t *&certificate, uint16_t &certificateSize) {
-	static const uint8_t savedPrivateKey[] =
-		"\xf3\xfc\xcc\x0d\x00\xd8\x03\x19\x54\xf9\x08\x64\xd4\x3c\x24\x7f"
-		"\x4b\xf5\xf0\x66\x5c\x6b\x50\xcc\x17\x74\x9a\x27\xd1\xcf\x76\x64";
-	static const uint8_t savedCertificate[] =
-		"\x30\x82\x01\x3c\x30\x81\xe4\xa0\x03\x02\x01\x02\x02\x0a\x47\x90"
-		"\x12\x80\x00\x11\x55\x95\x73\x52\x30\x0a\x06\x08\x2a\x86"
-		"\x48\xce\x3d\x04\x03\x02\x30\x17\x31\x15\x30\x13\x06\x03"
-		"\x55\x04\x03\x13\x0c\x47\x6e\x75\x62\x62\x79\x20\x50\x69"
-		"\x6c\x6f\x74\x30\x1e\x17\x0d\x31\x32\x30\x38\x31\x34\x31"
-		"\x38\x32\x39\x33\x32\x5a\x17\x0d\x31\x33\x30\x38\x31\x34"
-		"\x31\x38\x32\x39\x33\x32\x5a\x30\x31\x31\x2f\x30\x2d\x06"
-		"\x03\x55\x04\x03\x13\x26\x50\x69\x6c\x6f\x74\x47\x6e\x75"
-		"\x62\x62\x79\x2d\x30\x2e\x34\x2e\x31\x2d\x34\x37\x39\x30"
-		"\x31\x32\x38\x30\x30\x30\x31\x31\x35\x35\x39\x35\x37\x33"
-		"\x35\x32\x30\x59\x30\x13\x06\x07\x2a\x86\x48\xce\x3d\x02"
-		"\x01\x06\x08\x2a\x86\x48\xce\x3d\x03\x01\x07\x03\x42\x00"
-		"\x04\x8d\x61\x7e\x65\xc9\x50\x8e\x64\xbc\xc5\x67\x3a\xc8"
-		"\x2a\x67\x99\xda\x3c\x14\x46\x68\x2c\x25\x8c\x46\x3f\xff"
-		"\xdf\x58\xdf\xd2\xfa\x3e\x6c\x37\x8b\x53\xd7\x95\xc4\xa4"
-		"\xdf\xfb\x41\x99\xed\xd7\x86\x2f\x23\xab\xaf\x02\x03\xb4"
-		"\xb8\x91\x1b\xa0\x56\x99\x94\xe1\x01\x30\x0a\x06\x08\x2a"
-		"\x86\x48\xce\x3d\x04\x03\x02\x03\x47\x00\x30\x44\x02\x20"
-		"\x60\xcd\xb6\x06\x1e\x9c\x22\x26\x2d\x1a\xac\x1d\x96\xd8"
-		"\xc7\x08\x29\xb2\x36\x65\x31\xdd\xa2\x68\x83\x2c\xb8\x36"
-		"\xbc\xd3\x0d\xfa\x02\x20\x63\x1b\x14\x59\xf0\x9e\x63\x30"
-		"\x05\x57\x22\xc8\xd8\x9b\x7f\x48\x88\x3b\x90\x89\xb8\x8d"
-		"\x60\xd1\xd9\x79\x59\x02\xb3\x04\x10\xdf";
 
-	privateKey = savedPrivateKey;
+void u2f::Core::getAttestationCertificate(const uint8_t *&certificate, uint16_t &certificateSize) {
+	static const uint8_t savedCertificate[] = {
+		0x30, 0x82, 0x01, 0x3c, 0x30, 0x81, 0xe4, 0xa0, 0x03, 0x02, 0x01, 0x02, 0x02, 0x0a, 0x47, 0x90,
+		0x12, 0x80, 0x00, 0x11, 0x55, 0x95, 0x73, 0x52, 0x30, 0x0a, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce,
+		0x3d, 0x04, 0x03, 0x02, 0x30, 0x17, 0x31, 0x15, 0x30, 0x13, 0x06, 0x03, 0x55, 0x04, 0x03, 0x13,
+		0x0c, 0x47, 0x6e, 0x75, 0x62, 0x62, 0x79, 0x20, 0x50, 0x69, 0x6c, 0x6f, 0x74, 0x30, 0x1e, 0x17,
+		0x0d, 0x31, 0x32, 0x30, 0x38, 0x31, 0x34, 0x31, 0x38, 0x32, 0x39, 0x33, 0x32, 0x5a, 0x17, 0x0d,
+		0x31, 0x33, 0x30, 0x38, 0x31, 0x34, 0x31, 0x38, 0x32, 0x39, 0x33, 0x32, 0x5a, 0x30, 0x31, 0x31,
+		0x2f, 0x30, 0x2d, 0x06, 0x03, 0x55, 0x04, 0x03, 0x13, 0x26, 0x50, 0x69, 0x6c, 0x6f, 0x74, 0x47,
+		0x6e, 0x75, 0x62, 0x62, 0x79, 0x2d, 0x30, 0x2e, 0x34, 0x2e, 0x31, 0x2d, 0x34, 0x37, 0x39, 0x30,
+		0x31, 0x32, 0x38, 0x30, 0x30, 0x30, 0x31, 0x31, 0x35, 0x35, 0x39, 0x35, 0x37, 0x33, 0x35, 0x32,
+		0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a,
+		0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00, 0x04, 0x8d, 0x61, 0x7e, 0x65, 0xc9,
+		0x50, 0x8e, 0x64, 0xbc, 0xc5, 0x67, 0x3a, 0xc8, 0x2a, 0x67, 0x99, 0xda, 0x3c, 0x14, 0x46, 0x68,
+		0x2c, 0x25, 0x8c, 0x46, 0x3f, 0xff, 0xdf, 0x58, 0xdf, 0xd2, 0xfa, 0x3e, 0x6c, 0x37, 0x8b, 0x53,
+		0xd7, 0x95, 0xc4, 0xa4, 0xdf, 0xfb, 0x41, 0x99, 0xed, 0xd7, 0x86, 0x2f, 0x23, 0xab, 0xaf, 0x02,
+		0x03, 0xb4, 0xb8, 0x91, 0x1b, 0xa0, 0x56, 0x99, 0x94, 0xe1, 0x01, 0x30, 0x0a, 0x06, 0x08, 0x2a,
+		0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02, 0x03, 0x47, 0x00, 0x30, 0x44, 0x02, 0x20, 0x60, 0xcd,
+		0xb6, 0x06, 0x1e, 0x9c, 0x22, 0x26, 0x2d, 0x1a, 0xac, 0x1d, 0x96, 0xd8, 0xc7, 0x08, 0x29, 0xb2,
+		0x36, 0x65, 0x31, 0xdd, 0xa2, 0x68, 0x83, 0x2c, 0xb8, 0x36, 0xbc, 0xd3, 0x0d, 0xfa, 0x02, 0x20,
+		0x63, 0x1b, 0x14, 0x59, 0xf0, 0x9e, 0x63, 0x30, 0x05, 0x57, 0x22, 0xc8, 0xd8, 0x9b, 0x7f, 0x48,
+		0x88, 0x3b, 0x90, 0x89, 0xb8, 0x8d, 0x60, 0xd1, 0xd9, 0x79, 0x59, 0x02, 0xb3, 0x04, 0x10, 0xdf
+	};
+
 	certificate = savedCertificate;
-	certificateSize = sizeof(savedCertificate) - 1;
+	certificateSize = sizeof(savedCertificate);
 }
 
-
+bool u2f::Core::attestationSign(const Hash &messageHash, Signature &signature) {
+	PrivateKey privateKey = {
+		0xf3, 0xfc, 0xcc, 0x0d, 0x00, 0xd8, 0x03, 0x19, 0x54, 0xf9, 0x08, 0x64, 0xd4, 0x3c, 0x24, 0x7f,
+		0x4b, 0xf5, 0xf0, 0x66, 0x5c, 0x6b, 0x50, 0xcc, 0x17, 0x74, 0x9a, 0x27, 0xd1, 0xcf, 0x76, 0x64
+	};
+	return sign(privateKey, messageHash, signature);
+}
 
 
 bool u2f::Core::isUserPresent() {

@@ -3,6 +3,10 @@
 #include <inttypes.h>
 
 namespace u2f {
+	typedef uint8_t Hash[32];
+	typedef uint8_t PrivateKey[32];
+	typedef uint8_t PubliceKey[64];
+	typedef uint8_t Signature[73];
 
 	class Core {
 	public:
@@ -19,7 +23,22 @@ namespace u2f {
 		//For a given applicationHash and handle, fetch the privateKey. Returns false if the handle is invalid
 		virtual bool fetchHandle(const uint8_t *applicationHash, const uint8_t *handle, uint8_t handleSize, uint8_t *privateKey);
 
-		virtual void getAttestationCertificate(const uint8_t *&privateKey, const uint8_t *&certificate, uint16_t &certificateSize);
+		/**
+		 * Returns the attestation certificate as a PEM buffer
+		 *
+		 * @param[out] certificate Will point to a buffer with the PEM certificate
+		 * @param[out] certificateSize Will be set with the size of #certificate
+		 */
+		virtual void getAttestationCertificate(const uint8_t *&certificate, uint16_t &certificateSize);
+
+		/**
+		 * Signs the messageHash with the attestation private key
+		 *
+		 * @param[in] messageHash SHA256 of the message being signed
+		 * @param[out] signature Buffer where the signature will be stored
+		 */
+		virtual bool attestationSign(const Hash &messageHash, Signature &signature);
+
 	};
 
 	class Protocol {
