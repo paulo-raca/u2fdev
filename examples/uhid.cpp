@@ -7,7 +7,7 @@
 #include <thread>
 
 int main() {
-	u2f::Core core;
+	u2f::SimpleCore core;
 	u2f::Hid hid(core);
 	hiddev::UHid uhid(hid);
 	uhid.run();

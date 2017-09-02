@@ -87,9 +87,9 @@ namespace u2f {
 		uint16_t processRequest(uint8_t cla, uint8_t ins, uint8_t p1, uint8_t p2, const uint8_t *request, uint32_t requestSize, uint8_t *response, uint32_t &responseSize);
 		uint16_t processRegisterRequest(const uint8_t *request, uint32_t requestSize, uint8_t *response, uint32_t &responseSize);
 		uint16_t processAuthenticationRequest(uint8_t control, const uint8_t *request, uint32_t requestSize, uint8_t *response, uint32_t &responseSize);
-		virtual void wink();
+
 		virtual bool supportsWink();
-		virtual bool isUserPresent();
+		virtual void wink();
 
 		/**
 		 * Creates a new handle.
@@ -101,11 +101,7 @@ namespace u2f {
 		 *
 		 * @return true if a new handle was enrolled, false if failed because the user isn't present.
 		 */
-		virtual bool enroll(
-				const Hash &applicationHash,
-				Handle &handle,
-				uint8_t &handleSize,
-				PublicKey &publicKey);
+		virtual bool enroll(const Hash &applicationHash, Handle &handle, uint8_t &handleSize, PublicKey &publicKey) = 0;
 
 		/**
 		 * Authenticates a handle.
@@ -119,13 +115,23 @@ namespace u2f {
 		 *
 		 * @return nullptr if the handle is invalid, or the the signer used to sign the authentication requests. It must be deleted by the caller.
 		 */
-		virtual Crypto::Signer* authenticate(const Hash &applicationHash, const Handle &handle, uint8_t handleSize, bool checkUserPresence, bool &userPresent, uint32_t &authCounter);
+		virtual Crypto::Signer* authenticate(const Hash &applicationHash, const Handle &handle, uint8_t handleSize, bool checkUserPresence, bool &userPresent, uint32_t &authCounter) = 0;
 
 		/**
 		 * Returns the signer used for attestation of the registration.
 		 *
 		 * @return The signer used to attestate the registration. It must be deleted by the caller.
 		 */
+		virtual Crypto::Signer* getAttestationSigner() = 0;
+	};
+
+	class SimpleCore : public Core {
+		virtual void wink();
+		virtual bool supportsWink();
+		virtual bool isUserPresent();
+
+		virtual bool enroll(const Hash &applicationHash, Handle &handle, uint8_t &handleSize, PublicKey &publicKey);
+		virtual Crypto::Signer* authenticate(const Hash &applicationHash, const Handle &handle, uint8_t handleSize, bool checkUserPresence, bool &userPresent, uint32_t &authCounter);
 		virtual Crypto::Signer* getAttestationSigner();
 	};
 
