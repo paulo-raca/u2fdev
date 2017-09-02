@@ -133,8 +133,8 @@ uint16_t u2f::Core::processRegisterRequest(const uint8_t *request, uint32_t requ
 		return SW_WRONG_LENGTH;
 	}
 
-	Hash &challengeHash = *(Hash*)&request[0];
-	Hash &applicationHash = *(Hash*)&request[32];
+	crypto::Hash &challengeHash = *(crypto::Hash*)&request[0];
+	crypto::Hash &applicationHash = *(crypto::Hash*)&request[32];
 
 	responseSize = 0;
 
@@ -143,8 +143,8 @@ uint16_t u2f::Core::processRegisterRequest(const uint8_t *request, uint32_t requ
 	responseReserved = 0x05;
 
 	// Public key
-	PublicKey &responsePublicKey = *(PublicKey*)&response[responseSize];
-	responseSize += sizeof(PublicKey);
+	crypto::PublicKey &responsePublicKey = *(crypto::PublicKey*)&response[responseSize];
+	responseSize += sizeof(crypto::PublicKey);
 
 	// Handle
 	uint8_t &responseKeyHandleSize = response[responseSize++];
@@ -159,7 +159,7 @@ uint16_t u2f::Core::processRegisterRequest(const uint8_t *request, uint32_t requ
 	responseSize += responseKeyHandleSize;
 
 	// Attestation
-	Crypto::Signer *attestationSigner = getAttestationSigner();
+	crypto::Signer *attestationSigner = getAttestationSigner();
 
 	// Copy the attestation Certificate to the response
 	const uint8_t *attestationCertificate = nullptr;
@@ -171,21 +171,21 @@ uint16_t u2f::Core::processRegisterRequest(const uint8_t *request, uint32_t requ
 	responseSize += attestationCertificateSize;
 
 	// Calculates the challenge hash
-	Hash hash;
+	crypto::Hash hash;
 	uint8_t hash_reserved = 0;
-	Crypto::sha256(
+	crypto::sha256(
 		hash,
 		&hash_reserved, 1,
-		applicationHash, sizeof(Hash),
-		challengeHash, sizeof(Hash),
+		applicationHash, sizeof(crypto::Hash),
+		challengeHash, sizeof(crypto::Hash),
 		responseKeyHandle, responseKeyHandleSize,
-		&responsePublicKey, sizeof(PublicKey),
+		&responsePublicKey, sizeof(crypto::PublicKey),
 		nullptr);
 
 	//Sign the challenge
-	Signature &responseSignature = *(Signature*)&response[responseSize];
+	crypto::Signature &responseSignature = *(crypto::Signature*)&response[responseSize];
 	attestationSigner->sign(hash, responseSignature);
-	responseSize += Crypto::signatureSize(responseSignature);
+	responseSize += crypto::signatureSize(responseSignature);
 
 	delete attestationSigner;
 	return SW_NO_ERROR;
@@ -205,8 +205,8 @@ uint16_t u2f::Core::processAuthenticationRequest(uint8_t control, const uint8_t 
 		return SW_WRONG_LENGTH;
 	}
 
-	Hash &challengeHash = *(Hash*)&request[0];
-	Hash &applicationHash = *(Hash*)&request[32];
+	crypto::Hash &challengeHash = *(crypto::Hash*)&request[0];
+	crypto::Hash &applicationHash = *(crypto::Hash*)&request[32];
 	uint8_t handleSize = request[64];
 	Handle &handle = *(Handle*)&request[65];
 	bool userPresent = false;
@@ -218,7 +218,7 @@ uint16_t u2f::Core::processAuthenticationRequest(uint8_t control, const uint8_t 
 		return SW_WRONG_LENGTH;
 	}
 
-	Crypto::Signer *signer = authenticate(applicationHash, handle, handleSize, signCondition != SignCondition::Never, userPresent, authCounter);
+	crypto::Signer *signer = authenticate(applicationHash, handle, handleSize, signCondition != SignCondition::Never, userPresent, authCounter);
 
 	// Check for invalid Handle
 	if (signer == nullptr) {
@@ -243,18 +243,18 @@ uint16_t u2f::Core::processAuthenticationRequest(uint8_t control, const uint8_t 
 	response[responseSize++] = authCounter >>  0;
 
 	// Perform signature
-	Hash hash;
-	Crypto::sha256(
+	crypto::Hash hash;
+	crypto::sha256(
 		hash,
-		applicationHash, sizeof(Hash),
+		applicationHash, sizeof(crypto::Hash),
 		response, responseSize,
-		challengeHash, sizeof(Hash),
+		challengeHash, sizeof(crypto::Hash),
 		nullptr);
 
-	Signature &signature = *(Signature*)&response[responseSize];
+	crypto::Signature &signature = *(crypto::Signature*)&response[responseSize];
 	signer->sign(hash, signature);
 	delete signer;
-	responseSize += Crypto::signatureSize(signature);
+	responseSize += crypto::signatureSize(signature);
 
 	LOG("Authenticate - Success");
 	return SW_NO_ERROR;

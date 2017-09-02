@@ -1,4 +1,5 @@
 #include "hiddev/uhid.h"
+#include "u2f/core-simple.h"
 #include "u2f/hid.h"
 #include <stdio.h>
 #include <math.h>

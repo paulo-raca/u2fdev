@@ -1,23 +1,24 @@
-#include <u2f/core.h>
+#include <u2f/core-simple.h>
+#include <u2f/crypto-simple.h>
 #include <stdio.h>
 #include <string.h>
 
-bool u2f::SimpleCore::enroll(const Hash &applicationHash, Handle &handle, uint8_t &handleSize, PublicKey &publicKey) {
+bool u2f::SimpleCore::enroll(const crypto::Hash &applicationHash, Handle &handle, uint8_t &handleSize, crypto::PublicKey &publicKey) {
 	// A user is required
 	if (!isUserPresent()) {
 		return false;
 	}
 
 	// Create the handle
-	handleSize = sizeof(Hash) + sizeof(PrivateKey);
-	Hash &handleApplicationHash = *(Hash*)&handle[0];
-	PrivateKey& handlePrivateKey = *(PrivateKey*)&handle[sizeof(Hash)];
+	handleSize = sizeof(crypto::Hash) + sizeof(crypto::PrivateKey);
+	crypto::Hash &handleApplicationHash = *(crypto::Hash*)&handle[0];
+	crypto::PrivateKey& handlePrivateKey = *(crypto::PrivateKey*)&handle[32];
 
 	//1st part of the handle is applicationHash
-	memcpy(handleApplicationHash, applicationHash, sizeof(Hash));
+	memcpy(handleApplicationHash, applicationHash, sizeof(crypto::Hash));
 
 	//Create the keypair
-	if (!Crypto::makeKeyPair(publicKey, handlePrivateKey)) {
+	if (!crypto::makeKeyPair(publicKey, handlePrivateKey)) {
 		//Failed to create a key.
 		//I guess this shoudn't happen?
 		return false;
@@ -26,17 +27,17 @@ bool u2f::SimpleCore::enroll(const Hash &applicationHash, Handle &handle, uint8_
 	return true; // Enrolled!
 }
 
-u2f::Crypto::Signer* u2f::SimpleCore::authenticate(const Hash &applicationHash, const Handle &handle, uint8_t handleSize, bool checkUserPresence, bool &userPresent, uint32_t &authCounter) {
+u2f::crypto::Signer* u2f::SimpleCore::authenticate(const crypto::Hash &applicationHash, const Handle &handle, uint8_t handleSize, bool checkUserPresence, bool &userPresent, uint32_t &authCounter) {
 	static uint32_t _authcounter = 0; // This sucks, the counter should not be reset at every launch
 
 	// Check for a valid handle
-	if (handleSize != sizeof(Hash) + sizeof(PrivateKey))
+	if (handleSize != sizeof(crypto::Hash) + sizeof(crypto::PrivateKey))
 		return nullptr;
-	const Hash& handleApplicationHash = *(Hash*)&handle[0];
-	const PrivateKey& handlePrivateKey = *(PrivateKey*)&handle[32];
+	const crypto::Hash& handleApplicationHash = *(crypto::Hash*)&handle[0];
+	const crypto::PrivateKey& handlePrivateKey = *(crypto::PrivateKey*)&handle[32];
 
 	// Ensure the applicationHash matches
-	if (memcmp(applicationHash, handleApplicationHash, sizeof(Hash)))
+	if (memcmp(applicationHash, handleApplicationHash, sizeof(crypto::Hash)))
 		return nullptr;
 
 	// Check for user presence
@@ -48,11 +49,11 @@ u2f::Crypto::Signer* u2f::SimpleCore::authenticate(const Hash &applicationHash, 
 	authCounter = _authcounter++;
 
 	// Return the Signer
-	return new Crypto::SimpleSigner(handlePrivateKey);
+	return new crypto::SimpleSigner(handlePrivateKey);
 }
 
-u2f::Crypto::Signer* u2f::SimpleCore::getAttestationSigner() {
-	static const PrivateKey privateKey = {
+u2f::crypto::Signer* u2f::SimpleCore::getAttestationSigner() {
+	static const crypto::PrivateKey privateKey = {
 		0xf3, 0xfc, 0xcc, 0x0d, 0x00, 0xd8, 0x03, 0x19, 0x54, 0xf9, 0x08, 0x64, 0xd4, 0x3c, 0x24, 0x7f,
 		0x4b, 0xf5, 0xf0, 0x66, 0x5c, 0x6b, 0x50, 0xcc, 0x17, 0x74, 0x9a, 0x27, 0xd1, 0xcf, 0x76, 0x64
 	};
@@ -78,7 +79,7 @@ u2f::Crypto::Signer* u2f::SimpleCore::getAttestationSigner() {
 		0x63, 0x1b, 0x14, 0x59, 0xf0, 0x9e, 0x63, 0x30, 0x05, 0x57, 0x22, 0xc8, 0xd8, 0x9b, 0x7f, 0x48,
 		0x88, 0x3b, 0x90, 0x89, 0xb8, 0x8d, 0x60, 0xd1, 0xd9, 0x79, 0x59, 0x02, 0xb3, 0x04, 0x10, 0xdf
 	};
-	return new Crypto::SimpleSigner(privateKey, certificate, sizeof(certificate));
+	return new crypto::SimpleSigner(privateKey, certificate, sizeof(certificate));
 }
 
 bool u2f::SimpleCore::isUserPresent() {
