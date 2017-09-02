@@ -5,8 +5,18 @@
 namespace u2f {
 	typedef uint8_t Hash[32];
 	typedef uint8_t PrivateKey[32];
-	typedef uint8_t PubliceKey[64];
+	typedef uint8_t PublicKey[65];
 	typedef uint8_t Signature[73];
+	typedef uint8_t Handle[255];
+
+	class Crypto {
+	public:
+		static void sha256(u2f::Hash &hash, ...);
+		static bool makeKeyPair(PublicKey &publicKey, PrivateKey &privateKey);
+		static bool sign(const PrivateKey &privateKey, const Hash &messageHash, u2f::Signature &signature);
+		static uint8_t signatureSize(const Signature &signature);
+	};
+
 
 	class Core {
 	public:

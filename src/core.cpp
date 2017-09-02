@@ -1,10 +1,6 @@
 #include <u2f/core.h>
-#include <uECC.h>
-#include <sha256.h>
 #include <stdio.h>
 #include <string.h>
-#include <inttypes.h>
-#include <stdarg.h>
 
 #define LOG(fmt, ...) fprintf(stderr, "u2f-core: " fmt "\n", ##__VA_ARGS__)
 
@@ -23,104 +19,6 @@
 #define AUTH_ENFORCE_USER_SIGN        0x03
 #define AUTH_DONT_ENFORCE_USER_SIGN   0x08
 
-struct uECC_SHA256 {
-	uECC_HashContext uECC;
-	SHA256_CTX ctx;
-	uint8_t tmp[128];
-
-	static void init(const uECC_HashContext *base) {
-		uECC_SHA256 *context = (uECC_SHA256 *)base;
-		sha256_init(&context->ctx);
-	}
-	static void update(const uECC_HashContext *base, const uint8_t *message, unsigned message_size) {
-		uECC_SHA256 *context = (uECC_SHA256 *)base;
-		sha256_update(&context->ctx, message, message_size);
-	}
-	static void finish(const uECC_HashContext *base, uint8_t *hash_result) {
-		uECC_SHA256 *context = (uECC_SHA256 *)base;
-		sha256_final(&context->ctx, hash_result);
-	}
-
-	uECC_SHA256() {
-		uECC.init_hash = &init;
-		uECC.update_hash = &update;
-		uECC.finish_hash = &finish;
-		uECC.block_size = 64;
-		uECC.result_size = 32;
-		uECC.tmp = tmp;
-	}
-};
-
-
-
-static void sha256(u2f::Hash &hash, ...) {
-	va_list ap;
-	va_start(ap, hash);
-
-	SHA256_CTX hashContext;
-	sha256_init(&hashContext);
-
-	while (true) {
-		uint8_t* buffer = va_arg(ap, uint8_t*);
-		if (buffer == nullptr) break;
-		int bufferSize = va_arg(ap, int);
-		sha256_update(&hashContext, buffer, bufferSize);
-	}
-
-	sha256_final(&hashContext, hash);
-}
-
-
-
-static bool sign(const u2f::PrivateKey &privateKey, const u2f::Hash &messageHash, u2f::Signature &signature) {
-	uECC_SHA256 eccHash;
-	uint8_t rawSignature[64]; //Maybe use signature and perform DER bullshit in-place?
-
-	int sign_success = uECC_sign_deterministic(
-		privateKey,
-		messageHash,
-		sizeof(u2f::Hash),
-		&eccHash.uECC,
-		rawSignature,
-		uECC_secp256r1());
-
-	if (!sign_success)
-		return false;
-
-	uint8_t signatureSize = 0;
-	//Wraps the key in a fucking DER container
-	signature[signatureSize++] = 0x30; //A header byte indicating a compound structure.
-	signature[signatureSize++] = 0; // Will fill later
-
-
-	signature[signatureSize++] = 0x02; //Integer number
-	if (rawSignature[0] & 0x80) {
-		signature[signatureSize++] = 0x21;
-		signature[signatureSize++] = 0x00;
-	} else {
-		signature[signatureSize++] = 0x20;
-	}
-	memcpy(&signature[signatureSize], &rawSignature[0], 32);
-	signatureSize += 32;
-
-
-	signature[signatureSize++] = 0x02; //Integer number
-	if (rawSignature[32] & 0x80) {
-		signature[signatureSize++] = 0x21;
-		signature[signatureSize++] = 0x00;
-	} else {
-		signature[signatureSize++] = 0x20;
-	}
-	memcpy(&signature[signatureSize], &rawSignature[32], 32);
-	signatureSize += 32;
-
-	signature[1] = signatureSize - 2; //Fill Signature size
-	return true;
-}
-
-static uint8_t signatureSize(const u2f::Signature &signature) {
-	return signature[1] + 2;
-}
 
 
 
@@ -250,16 +148,12 @@ uint16_t u2f::Core::processRegisterRequest(const uint8_t *request, uint32_t requ
 	responseSize++;
 
 	//Public key
-	uint8_t &responsePublicKeyType = response[responseSize];
-	responseSize++;
-	responsePublicKeyType = 0x04;
+	PublicKey &responsePublicKey = *(PublicKey*)&response[responseSize];
+	responseSize += sizeof(PublicKey);
 
-	uint8_t *responsePublicKey = &response[responseSize];
-	responseSize += 64;
+	PrivateKey privateKey;
 
-	uint8_t privateKey[32];
-
-	if (!uECC_make_key(responsePublicKey, privateKey, uECC_secp256r1())) {
+	if (!Crypto::makeKeyPair(responsePublicKey, privateKey)) {
 		//Failed to create a key.
 		//I guess this shoudn't happen?
 		responseSize = 0;
@@ -290,18 +184,17 @@ uint16_t u2f::Core::processRegisterRequest(const uint8_t *request, uint32_t requ
 	{
 		Hash hash;
 		uint8_t hash_reserved = 0;
-		sha256(
+		Crypto::sha256(
 			hash,
 			&hash_reserved, 1,
-			applicationHash, 32,
-			challengeHash, 32,
+			applicationHash, sizeof(Hash),
+			challengeHash, sizeof(Hash),
 			responseKeyHandle, responseKeyHandleSize,
-			&responsePublicKeyType, 1,
-			responsePublicKey, 64,
+			&responsePublicKey, sizeof(PublicKey),
 			nullptr);
 
 		attestationSign(hash, responseSignature);
-		responseSize += signatureSize(responseSignature);;
+		responseSize += Crypto::signatureSize(responseSignature);;
 	}
 	return SW_NO_ERROR;
 }
@@ -358,15 +251,15 @@ uint16_t u2f::Core::processAuthenticationRequest(uint8_t control, const uint8_t 
 	Signature &signature = *(Signature*)&response[responseSize];
 
 	Hash hash;
-	sha256(
+	Crypto::sha256(
 		hash,
 		applicationHash, 32,
 		response, 5,
 		challengeHash, 32,
 		nullptr);
 
-	sign(privateKey, hash, signature);
-	responseSize += signatureSize(signature);
+	Crypto::sign(privateKey, hash, signature);
+	responseSize += Crypto::signatureSize(signature);
 
 	LOG("Authenticate - Success");
 	return SW_NO_ERROR;
@@ -424,7 +317,7 @@ bool u2f::Core::attestationSign(const Hash &messageHash, Signature &signature) {
 		0xf3, 0xfc, 0xcc, 0x0d, 0x00, 0xd8, 0x03, 0x19, 0x54, 0xf9, 0x08, 0x64, 0xd4, 0x3c, 0x24, 0x7f,
 		0x4b, 0xf5, 0xf0, 0x66, 0x5c, 0x6b, 0x50, 0xcc, 0x17, 0x74, 0x9a, 0x27, 0xd1, 0xcf, 0x76, 0x64
 	};
-	return sign(privateKey, messageHash, signature);
+	return Crypto::sign(privateKey, messageHash, signature);
 }
 
 
