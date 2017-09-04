@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core.h"
+#include <u2f/crypto.h>
 
 namespace u2f {
 	namespace crypto {
@@ -10,7 +10,7 @@ namespace u2f {
 		 * It doesn't do any memory management -- The buffers aren't copied or freed anywhere.
 		 */
 		class SimpleSigner : public Signer {
-			const PrivateKey &privateKey;
+			PrivateKey privateKey;
 			const uint8_t *certificate;
 			const uint16_t certificateSize;
 		public:

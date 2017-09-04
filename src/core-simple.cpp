@@ -9,47 +9,32 @@ bool u2f::SimpleCore::enroll(const crypto::Hash &applicationHash, Handle &handle
 		return false;
 	}
 
-	// Create the handle
-	handleSize = sizeof(crypto::Hash) + sizeof(crypto::PrivateKey);
-	crypto::Hash &handleApplicationHash = *(crypto::Hash*)&handle[0];
-	crypto::PrivateKey& handlePrivateKey = *(crypto::PrivateKey*)&handle[32];
-
-	//1st part of the handle is applicationHash
-	memcpy(handleApplicationHash, applicationHash, sizeof(crypto::Hash));
-
 	//Create the keypair
-	if (!crypto::makeKeyPair(publicKey, handlePrivateKey)) {
+	crypto::PrivateKey privateKey;
+	if (!crypto::makeKeyPair(publicKey, privateKey)) {
 		//Failed to create a key.
 		//I guess this shoudn't happen?
 		return false;
 	}
 
-	return true; // Enrolled!
+	// Create the handle
+	return createHandle(applicationHash, privateKey, handle, handleSize);
 }
 
 u2f::crypto::Signer* u2f::SimpleCore::authenticate(const crypto::Hash &applicationHash, const Handle &handle, uint8_t handleSize, bool checkUserPresence, bool &userPresent, uint32_t &authCounter) {
-	static uint32_t _authcounter = 0; // This sucks, the counter should not be reset at every launch
+	crypto::PrivateKey privateKey;
 
-	// Check for a valid handle
-	if (handleSize != sizeof(crypto::Hash) + sizeof(crypto::PrivateKey))
+	// Fetch the key
+	if (!fetchHandle(applicationHash, handle, handleSize, privateKey, authCounter)) {
 		return nullptr;
-	const crypto::Hash& handleApplicationHash = *(crypto::Hash*)&handle[0];
-	const crypto::PrivateKey& handlePrivateKey = *(crypto::PrivateKey*)&handle[32];
-
-	// Ensure the applicationHash matches
-	if (memcmp(applicationHash, handleApplicationHash, sizeof(crypto::Hash)))
-		return nullptr;
+	}
 
 	// Check for user presence
 	if (checkUserPresence) {
 		userPresent = isUserPresent();
 	}
 
-	// Get the authentication counter
-	authCounter = _authcounter++;
-
-	// Return the Signer
-	return new crypto::SimpleSigner(handlePrivateKey);
+	return new crypto::SimpleSigner(privateKey);
 }
 
 u2f::crypto::Signer* u2f::SimpleCore::getAttestationSigner() {
