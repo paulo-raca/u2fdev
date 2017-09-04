@@ -1,5 +1,6 @@
 #include "hiddev/uhid.h"
 #include "u2f/core-unsafe.h"
+#include "u2f/core-stateless.h"
 #include "u2f/core-sqlite.h"
 #include "u2f/hid.h"
 #include <stdio.h>
@@ -10,7 +11,8 @@
 
 int main() {
 	//u2f::UnsafeCore core;
-	u2f::SQLiteCore core("handles.db");
+	//u2f::SQLiteCore core("handles.db");
+	u2f::StatelessCore core("Password");
 	u2f::Hid hid(core);
 	hiddev::UHid uhid(hid);
 	uhid.run();
