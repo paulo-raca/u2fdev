@@ -5,18 +5,13 @@
 namespace u2f {
 	typedef uint8_t Handle[255];
 
-	enum class SignCondition {
-		Never = 0x07,
-		Always = 0x08,
-		RequiresUserPresence = 0x03
-	};
-
 	class Core {
-	public:
-		virtual bool processRawAdpu(const uint8_t* rawRequest, uint32_t rawRequestSize, const uint8_t *&rawResponse, uint32_t& rawResponseSize);
+	private:
 		uint16_t processRequest(uint8_t cla, uint8_t ins, uint8_t p1, uint8_t p2, const uint8_t *request, uint32_t requestSize, uint8_t *response, uint32_t &responseSize);
 		uint16_t processRegisterRequest(const uint8_t *request, uint32_t requestSize, uint8_t *response, uint32_t &responseSize);
 		uint16_t processAuthenticationRequest(uint8_t control, const uint8_t *request, uint32_t requestSize, uint8_t *response, uint32_t &responseSize);
+	public:
+		virtual bool processRawAdpu(const uint8_t* rawRequest, uint32_t rawRequestSize, const uint8_t *&rawResponse, uint32_t& rawResponseSize);
 
 		virtual bool supportsWink();
 		virtual void wink();

@@ -20,15 +20,6 @@
 #define AUTH_DONT_ENFORCE_USER_SIGN   0x08
 
 
-
-
-
-
-
-
-
-
-
 bool u2f::Core::processRawAdpu(const uint8_t* rawRequest, uint32_t rawRequestSize, const uint8_t *&rawResponse, uint32_t& rawResponseSize) {
 	if (rawRequestSize < 4)
 		return false;
@@ -192,9 +183,8 @@ uint16_t u2f::Core::processRegisterRequest(const uint8_t *request, uint32_t requ
 }
 
 uint16_t u2f::Core::processAuthenticationRequest(uint8_t control, const uint8_t *request, uint32_t requestSize, uint8_t *response, uint32_t &responseSize) {
-	SignCondition signCondition = (SignCondition)control;
-	if (signCondition != SignCondition::Always && signCondition != SignCondition::Never && signCondition != SignCondition::RequiresUserPresence) {
-		LOG("Authenticate - Invalid sign condition %d", (uint8_t)signCondition);
+	if (control != AUTH_CHECK_ONLY && control != AUTH_ENFORCE_USER_SIGN && control != AUTH_DONT_ENFORCE_USER_SIGN) {
+		LOG("Authenticate - Invalid sign condition %d", control);
 		responseSize = 0;
 		return SW_WRONG_DATA;
 	}
@@ -218,7 +208,7 @@ uint16_t u2f::Core::processAuthenticationRequest(uint8_t control, const uint8_t 
 		return SW_WRONG_LENGTH;
 	}
 
-	crypto::Signer *signer = authenticate(applicationHash, handle, handleSize, signCondition != SignCondition::Never, userPresent, authCounter);
+	crypto::Signer *signer = authenticate(applicationHash, handle, handleSize, control != AUTH_CHECK_ONLY, userPresent, authCounter);
 
 	// Check for invalid Handle
 	if (signer == nullptr) {
@@ -228,7 +218,7 @@ uint16_t u2f::Core::processAuthenticationRequest(uint8_t control, const uint8_t 
 	}
 
 	// Check for user not present
-	if ((signCondition == SignCondition::Never) || ((signCondition == SignCondition::RequiresUserPresence) && !userPresent)) {
+	if (control == AUTH_CHECK_ONLY || (control == AUTH_ENFORCE_USER_SIGN && !userPresent)) {
 		LOG("Authenticate - User not present");
 		responseSize = 0;
 		delete signer;
