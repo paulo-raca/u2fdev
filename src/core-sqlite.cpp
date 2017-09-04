@@ -1,5 +1,4 @@
 #include <u2f/core-sqlite.h>
-#include <sqlite3.h>
 #include <string.h>
 #include <stdio.h>
 
