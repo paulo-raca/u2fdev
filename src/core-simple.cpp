@@ -85,10 +85,3 @@ u2f::crypto::Signer* u2f::SimpleCore::getAttestationSigner() {
 bool u2f::SimpleCore::isUserPresent() {
 	return true;
 }
-
-void u2f::SimpleCore::wink() {
-	printf("Wink ;)\n");
-}
-bool u2f::SimpleCore::supportsWink() {
-	return true;
-}
