@@ -1,10 +1,12 @@
 /**
- * This example extends the SQLiteCore, using libnotify to display user presence confirmation popups.
+ * This exposes a new core, NotifySQLiteCore, as a stand-alone U2F implementationof for Linux Desktops.
  *
- * The multithreading is a bit messy, since the popup and the U2F messages are asynchnous with each other:
+ * The new extends SQLiteCore to use libnotify to display user presence confirmation popups.
+ *
+ * Unfortunately, the multithreading is necessarialy messy, since the popup and the U2F messages are asynchnous with each other:
  * - The popup must be shown whevener user presence is checked
- * - The popup must be closed after a 5s timout without u2F messages checking for user presence,
- *   or when presence is confirmed.
+ * - The popup must be closed after a 5s timout without u2F messages checking
+ *   for user presence, or when presence is confirmed.
  * - After presence is confirmed, U2F will have only 5s to check for it.
  */
 
