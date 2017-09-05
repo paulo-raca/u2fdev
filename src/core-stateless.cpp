@@ -22,8 +22,8 @@ bool u2f::StatelessCore::createHandle(const crypto::Hash &applicationHash, const
 	// Creates the unencrypted handle: [privateKey, applicationHash]
 	handleSize = sizeof(crypto::Hash) + sizeof(crypto::PrivateKey);
 	uint8_t rawHandle[sizeof(crypto::PrivateKey) + sizeof(crypto::Hash)];
-	memcpy(rawHandle, applicationHash, sizeof(crypto::Hash));
-	memcpy(rawHandle + sizeof(crypto::Hash), privateKey, sizeof(crypto::PrivateKey));
+	memcpy(rawHandle, privateKey, sizeof(crypto::PrivateKey));
+	memcpy(rawHandle + sizeof(crypto::PrivateKey), applicationHash, sizeof(crypto::Hash));
 
 	aes_encrypt_cbc(rawHandle, handleSize, handle, aesKey, 256, applicationHash);
 	return true;
@@ -41,16 +41,16 @@ bool u2f::StatelessCore::fetchHandle(const u2f::crypto::Hash &applicationHash, c
 	aes_decrypt_cbc(handle, handleSize, rawHandle, aesKey, 256, applicationHash);
 
 	// Invalid applicationHash
-	if (memcmp(rawHandle, applicationHash, sizeof(crypto::Hash))) {
+	if (memcmp(rawHandle + sizeof(crypto::PrivateKey), applicationHash, sizeof(crypto::Hash))) {
 		LOG("applicationHash check failed");
 		return false;
 	}
 
 	// Sounds OK, output the privateKey
-	memcpy(privateKey, rawHandle + sizeof(crypto::Hash), sizeof(crypto::PrivateKey));
+	memcpy(privateKey, rawHandle, sizeof(crypto::PrivateKey));
 
-	// AuthCounter must be monotonically increasign.
-	// Since this is the dumbest possible Core example, we can use timestamp as AuthCounter
+	// AuthCounter must be monotonically increasing.
+	// Since we want to be stateless, we can use timestamp for it
 	struct timespec spec;
     clock_gettime(CLOCK_REALTIME, &spec);
 	authCounter = spec.tv_sec;

@@ -17,9 +17,9 @@
 #include <hiddev/uhid.h>
 
 int main() {
-	//u2f::UnsafeCore core;
-	//u2f::StatelessCore core("Password");
-	u2f::SQLiteCore core("handles.db");
+// 	u2f::UnsafeCore core;
+	u2f::StatelessCore core("Password");
+// 	u2f::SQLiteCore core("handles.db");
 	//u2f::BiometricCore core("handles.db");
 	u2f::Hid hid(core);
 	hiddev::UHid uhid(hid);

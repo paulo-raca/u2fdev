@@ -4,8 +4,8 @@
 
 bool u2f::UnsafeCore::createHandle(const crypto::Hash &applicationHash, const crypto::PrivateKey &privateKey, Handle &handle, uint8_t &handleSize) {
 	handleSize = sizeof(crypto::Hash) + sizeof(crypto::PrivateKey);
-	memcpy(handle, applicationHash, sizeof(crypto::Hash));
-	memcpy(handle + sizeof(crypto::Hash), privateKey, sizeof(crypto::PrivateKey));
+	memcpy(handle, privateKey, sizeof(crypto::PrivateKey));
+	memcpy(handle + sizeof(crypto::PrivateKey), applicationHash, sizeof(crypto::Hash));
 	return true;
 }
 
@@ -15,15 +15,15 @@ bool u2f::UnsafeCore::fetchHandle(const u2f::crypto::Hash &applicationHash, cons
 		return false;
 	}
 	// Invalid applicationHash
-	if (memcmp(handle, applicationHash, sizeof(crypto::Hash))) {
+	if (memcmp(handle + sizeof(crypto::PrivateKey), applicationHash, sizeof(crypto::Hash))) {
 		return false;
 	}
 
 	// Sounds OK, output the privateKey
-	memcpy(privateKey, handle + sizeof(crypto::Hash), sizeof(crypto::PrivateKey));
+	memcpy(privateKey, handle, sizeof(crypto::PrivateKey));
 
-	// AuthCounter must be monotonically increasign.
-	// Since this is the dumbest possible Core example, we can use timestamp as AuthCounter
+	// AuthCounter must be monotonically increasing.
+	// Since we want to be stateless, we can use timestamp for it
 	struct timespec spec;
     clock_gettime(CLOCK_REALTIME, &spec);
 	authCounter = spec.tv_sec;
