@@ -52,11 +52,14 @@ namespace u2f {
 			: Protocol(core)
 		{ }
 
-		virtual void getDescriptor(const uint8_t* &descriptorBuffer, uint16_t &descriptorSize);
+		// HID functions
+		void getDescriptor(const uint8_t* &descriptorBuffer, uint16_t &descriptorSize) override;
+		bool isNumberedReport(hiddev::ReportType reportType) override;
+		uint16_t getReportSize(hiddev::ReportType reportType, uint8_t reportNum) override;
+		bool receivedOutputReport(hiddev::ReportType reportType, uint8_t reportNum, const uint8_t* reportBuffer, uint16_t reportSize) override;
 
-		virtual bool receivedOutputReport(hiddev::ReportType reportType, uint8_t reportNum, const uint8_t* reportBuffer, uint16_t reportSize);
-
-		virtual void handleRequest(uint32_t cid, uint8_t cmd, const uint8_t* payload, uint16_t payloadSize);
+		// U2F Protocol functions
+		void handleRequest(uint32_t cid, uint8_t cmd, const uint8_t* payload, uint16_t payloadSize);
 		void sendResponse(uint32_t cid, uint8_t cmd, const uint8_t* payload, uint16_t payloadSize);
 		void sendErrorResponse(uint32_t cid, uint8_t err);
 

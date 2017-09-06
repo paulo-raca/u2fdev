@@ -115,6 +115,20 @@ void u2f::Hid::getDescriptor(const uint8_t* &descriptorBuffer, uint16_t &descrip
 	descriptorSize = sizeof(descriptor);
 }
 
+bool u2f::Hid::isNumberedReport(hiddev::ReportType reportType) {
+	return false;
+}
+
+uint16_t u2f::Hid::getReportSize(hiddev::ReportType reportType, uint8_t reportNum) {
+	if (reportNum == 0 && reportType == hiddev::ReportType::Output)
+		return REQUEST_PACKET_SIZE;
+
+	if (reportNum == 0 && reportType == hiddev::ReportType::Input)
+		return RESPONSE_PACKET_SIZE;
+
+	return 0;
+}
+
 bool u2f::Hid::receivedOutputReport(hiddev::ReportType reportType, uint8_t reportNum, const uint8_t* reportBuffer, uint16_t reportSize) {
 	if (reportType != hiddev::ReportType::Output)
 		return false;
