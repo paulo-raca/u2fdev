@@ -1,6 +1,6 @@
 [submodule "dependencies/crypto-algorithms"]
 	path = dependencies/crypto-algorithms
-	url = git@github.com:B-Con/crypto-algorithms.git
+	url = git@github.com:paulo-raca/crypto-algorithms.git
 [submodule "dependencies/hiddev"]
 	path = dependencies/hiddev
 	url = git@github.com:paulo-raca/hiddev.git
